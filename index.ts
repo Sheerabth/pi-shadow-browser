@@ -558,7 +558,7 @@ export default function (pi: ExtensionAPI) {
   registerTool({
     name: "browser_wait",
     label: "Wait in session",
-    description: "Wait a fixed number of seconds (max 30, for loading content), then re-observe.",
+    description: "Wait a fixed number of seconds (max 30, for loading content), then re-observe. One wait, then act — never chain waits or shell-sleep in a loop to poll a page; use browser_read to check freshness.",
     parameters: Type.Object({
       seconds: Type.Number({ description: "Seconds to wait, 0–30." }),
     }),
@@ -597,7 +597,8 @@ export default function (pi: ExtensionAPI) {
     description:
       "Re-observe the current session page without navigating, acting, or waiting. " +
       "Use when the page may have changed by itself (live updates, timers) or to check " +
-      "freshness without losing form or app state to a reload.",
+      "freshness without losing form or app state to a reload. " +
+      "Check once after acting — do not poll it in a loop; pair one browser_wait with one read.",
     parameters: Type.Object({}),
     execute: async () => {
       try {
