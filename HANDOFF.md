@@ -74,7 +74,7 @@ headless browser as headed (an invisible window serves no manual use).
 - `vendor/` — `snapshot.js` (DOM reader, skips password/file/hidden inputs —
   the model can never see password fields), `shadow-supplement.js`,
   `markdown.js`. Both verified working under Firefox.
-- `pi-extension/shadow-browser.ts` — 20 `browser_*` tools (no `browser_pdf`)
+- `index.ts` — 20 `browser_*` tools (no `browser_pdf`)
   + 4 commands: `/browser-config`, `/browser-open`, `/browser-shutdown`
   (stops the session browser), `/browser-reset` (closes session, wipes agent
   home).

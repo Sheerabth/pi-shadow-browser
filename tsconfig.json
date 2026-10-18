@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*", "examples/**/*", "pi-extension/**/*"]
+  "include": ["src/**/*", "examples/**/*", "index.ts"]
 }

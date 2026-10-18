@@ -85,7 +85,7 @@ navigate/act  → PageSnapshot       per-process session on its own browser
 | `vendor/shadow-supplement.js` | open-shadow-DOM + `[onclick]`/label/file-input controls, shared node identity |
 | `vendor/markdown.js` | dependency-free page-side HTML→Markdown (approach ported from browser-use) |
 | `src/config.ts` | profile dir, headless, locale/timezone/proxy (there are no keys) |
-| `pi-extension/shadow-browser.ts` | the Pi tools + `/browser-config`, `/browser-open`, `/browser-reset`, `/browser-shutdown` |
+| `index.ts` | the Pi tools + `/browser-config`, `/browser-open`, `/browser-reset`, `/browser-shutdown` |
 
 ## Installation
 

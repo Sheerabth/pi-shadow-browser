@@ -7,7 +7,7 @@
  * (separate agent identity; never touches your Chrome).
  *
  * Install as a Pi package (`pi install <this-dir>`) or load directly:
- * `pi --extension ./pi-extension/shadow-browser.ts`.
+ * `pi --extension ./index.ts`.
  *
  * Registers: browser_search, browser_open, browser_navigate, browser_act,
  * browser_press, browser_screenshot, browser_click_at, browser_tabs,
@@ -69,7 +69,7 @@ import {
   videoSeek,
   videoTranscript,
   wait,
-} from "../src/index.js";import type { ChromeConfig } from "../src/index.js";
+} from "./src/index.js";import type { ChromeConfig } from "./src/index.js";
 
 /**
  * Map the Pi settings `shadowBrowser` section to config overrides.

@@ -26,7 +26,7 @@
   ],
   "pi": {
     "extensions": [
-      "./pi-extension/shadow-browser.ts"
+      "./index.ts"
     ]
   },
   "dependencies": {
