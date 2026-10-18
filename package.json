@@ -25,8 +25,21 @@
   },
   "keywords": [
     "pi-package",
+    "pi-extension",
     "browser",
-    "automation"
+    "automation",
+    "camoufox"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "vendor",
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [

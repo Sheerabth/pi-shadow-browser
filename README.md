@@ -92,11 +92,11 @@ navigate/act  → PageSnapshot       per-process session on its own browser
 Prereqs: Node 22+.
 
 ```bash
-git clone <this-repo>
+git clone git@github.com:pi-ecosystem/pi-shadow-browser.git
 cd pi-shadow-browser
 npm install
 npx camoufox-js fetch   # one-time anti-detect browser download (postinstall does this)
-pi install ./pi-shadow-browser
+pi install git:github.com/pi-ecosystem/pi-shadow-browser   # or: pi install ./pi-shadow-browser
 ```
 
 No browser extension, no remote-debugging setup. Agents run headless
