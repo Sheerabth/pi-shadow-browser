@@ -50,37 +50,38 @@ export function profileLockInfo(root?: string): { locked: boolean; stale: boolea
 }
 
 /** True when a live browser process is actually using this profile dir.
- *  Matches the exact --user-data-dir=<root>/browser (plus --user-data-dir=
- *  <root> fallback) NUL-bounded in /proc/<pid>/cmdline, skipping self and
- *  parent and requiring chrome in cmdline — so /tmp/pr never matches
- *  /tmp/pr-other and never matches a shell command containing the string.
- *  Falls back to pgrep (exact, self-excluding) when /proc is unavailable.
- *  Fail-closed: if we cannot tell (no pgrep), assume in use. */
+ *  Matches Chromium (--user-data-dir=<dir>) and Firefox
+ *  (-profile <dir>) command lines, token-split on whitespace AND NULs
+ *  (wrappers and sandboxes space-join argv), skipping self and parent —
+ *  so /tmp/pr never matches /tmp/pr-other. Fail-closed: if we cannot
+ *  tell (no /proc, no pgrep), assume in use. */
 export function isProfileInUse(root?: string): boolean {
   const dir = root ?? agentRoot();
   const viaProc = isProfileInUseProc(dir);
   if (viaProc !== null) return viaProc;
-  try {
-    const out = execFileSync("pgrep", ["-af", `user-data-dir=${join(dir, "browser")}`], { encoding: "utf8" });
-    const me = new Set([String(process.pid), String(process.ppid)]);
-    for (const line of out.split("\n").filter(Boolean)) {
-      const pid = line.split(" ")[0];
-      if (me.has(pid)) continue;
-      if (!line.includes(`--user-data-dir=${join(dir, "browser")}`)) continue;
-      if (!/chrome/i.test(line)) continue;
-      return true;
+  let pgrepRan = false;
+  for (const pat of [`user-data-dir=${dir}`, `-profile ${dir}`]) {
+    try {
+      const out = execFileSync("pgrep", ["-af", pat], { encoding: "utf8" });
+      pgrepRan = true;
+      const me = new Set([String(process.pid), String(process.ppid)]);
+      for (const line of out.split("\n").filter(Boolean)) {
+        const pid = line.split(" ")[0];
+        if (me.has(pid)) continue;
+        if (!/(chrome|firefox|camoufox)/i.test(line)) continue;
+        return true;
+      }
+    } catch (err) {
+      // Exit status 1 = no match for this pattern (informative, not fatal).
+      if ((err as { status?: unknown })?.status === 1) pgrepRan = true;
     }
-    return false;
-  } catch (err) {
-    // Exit status 1 = no match (free). Anything else (no pgrep,
-    // permission errors) = cannot tell, assume in use.
-    return (err as { status?: unknown })?.status !== 1;
   }
+  // Fail closed only when pgrep itself is unavailable; a clean no-match
+  // means free.
+  return !pgrepRan;
 }
 
 function isProfileInUseProc(dir: string): boolean | null {
-  const exactBrowser = `--user-data-dir=${join(dir, "browser")}`;
-  const exactRoot = `--user-data-dir=${dir}`;
   let entries: string[];
   try {
     entries = readdirSync("/proc");
@@ -93,15 +94,20 @@ function isProfileInUseProc(dir: string): boolean | null {
       if (!/^\d+$/.test(e)) continue;
       const pid = Number(e);
       if (me.has(pid)) continue;
-      let args: string[];
+      let tokens: string[];
       try {
-        args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+        tokens = readFileSync(`/proc/${pid}/cmdline`, "utf8").split(/[\s\0]+/);
       } catch {
         continue;
       }
-      if (!args.some((a) => a === exactBrowser || a === exactRoot)) continue;
-      if (!/chrome/i.test(args.join(" "))) continue;
-      return true;
+      if (!/(chrome|firefox|camoufox)/i.test(tokens.join(" "))) continue;
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        // Chromium: --user-data-dir=<dir>[/…] — old agent used <dir>/browser.
+        if (t === `--user-data-dir=${dir}` || t === `--user-data-dir=${join(dir, "browser")}`) return true;
+        // Firefox: -profile <dir> (Camoufox passes the profile dir here).
+        if ((t === "-profile" || t === "--profile") && (tokens[i + 1] === dir || (tokens[i + 1] ?? "").startsWith(dir + "/"))) return true;
+      }
     }
     return false;
   } catch {

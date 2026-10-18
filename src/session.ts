@@ -15,7 +15,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { AgentBrowserAdapter } from "./browserAdapter.js";
 import type { LaunchOpts } from "./browserAdapter.js";
-import { daemonStatus, shutdownDaemon } from "./daemon.js";
 import { agentRoot, wipeProfileCopy } from "./profile.js";
 import type { PageSnapshot } from "./types.js";
 
@@ -62,10 +61,18 @@ function abortRace(signal: AbortSignal): Promise<never> {
  *  ensureSession, so lazy creation on ANY tool uses the active config. */
 let defaultOpts: SessionOpts = {};
 /** Engine the live session is bound to (resolved profileDir + proxy +
- *  headless). A change closes the old session window and rebinds. */
+ *  headless + browser binary). A change closes the old session window
+ *  and rebinds. */
 let activeRoot: string | null = null;
 let activeProxy: string | undefined = undefined;
 let activeHeadless: boolean | undefined = undefined;
+
+/** Drop all engine bindings (session is gone — next call rebinds fresh). */
+function clearBindings(): void {
+  activeRoot = null;
+  activeProxy = undefined;
+  activeHeadless = undefined;
+}
 
 /** Set/merge the session-wide defaults. Next ensureSession uses them. */
 export function configureSession(opts: SessionOpts): void {
@@ -121,9 +128,7 @@ async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
         // Best-effort.
       }
       session = null;
-      activeRoot = null;
-      activeProxy = undefined;
-      activeHeadless = undefined;
+      clearBindings();
       throw err;
     }
     // Timeout: unknown browser state, and the wedged op might still land
@@ -135,9 +140,7 @@ async function exclusive<T>(fn: () => Promise<T>): Promise<T> {
         // Best-effort.
       }
       session = null;
-      activeRoot = null;
-      activeProxy = undefined;
-      activeHeadless = undefined;
+      clearBindings();
       throw err;
     }
     if (await reviveIfDead(err)) return runOnce();
@@ -195,33 +198,48 @@ async function ensureSession(url?: string, opts: SessionOpts = {}): Promise<Agen
   return session;
 }
 
-/** /browser-open in THIS session's window: ensures the session on the
- *  configured engine (restarting a headless daemon as headed — an
- *  invisible window serves no manual use), then focuses or opens one
- *  blank tab in-window. Idempotent: never duplicates blanks, never
- *  touches another agent's window. */
+/** /browser-open on THIS session's tabs: ensures the session (relaunching
+ *  a headless browser as headed — an invisible window serves no manual
+ *  use), then focuses or opens one blank tab. Idempotent: never duplicates
+ *  blanks, never touches another agent's tabs. */
 export async function openBlankTab(opts: SessionOpts = {}): Promise<string> {
   return exclusive(async () => {
     const m = mergedOpts({ headless: false, ...opts });
     const headless = m.headless ?? false;
-    const root = m.profileDir ?? agentRoot();
-    if (!headless) {
-      const st = daemonStatus(root);
-      if (st && st.headless) {
-        await shutdownDaemon(root).catch(() => undefined);
-        if (session) {
-          try {
-            await session.close();
-          } catch {
-            // Best-effort.
-          }
-          session = null;
-        }
+    if (!headless && activeHeadless === true && session) {
+      // Headless browser can't show a manual tab: close and relaunch headed.
+      try {
+        await session.close();
+      } catch {
+        // Best-effort.
       }
+      session = null;
+      clearBindings();
     }
     const browser = await ensureSession(undefined, { ...m, headless });
     return browser.openBlankTab();
   });
+}
+
+/** Browser state for UI decisions, or null when none is running.
+ *  Never throws. Keeps the /browser-open + /browser-config UX unchanged. */
+export function daemonStatus(_root?: string): { running: boolean; headless: boolean } | null {
+  if (!session) return null;
+  return { running: true, headless: activeHeadless ?? true };
+}
+
+/** No-op kept for API shape: with no daemon there is nothing shared to
+ *  stop. Use browser_close (closeSession) to end this session's browser. */
+export function isDaemonAlive(_info?: unknown): boolean {
+  return session !== null;
+}
+
+/** Stop this session's browser if one is running. Returns true when
+ *  something stopped. (No shared daemon exists anymore.) */
+export async function shutdownDaemon(_root?: string): Promise<boolean> {
+  if (!session) return false;
+  await closeSession().catch(() => undefined);
+  return true;
 }
 
 /** Drop a dead session (crashed browser) so the next call relaunches. */
@@ -234,9 +252,7 @@ async function reviveIfDead(err: unknown): Promise<boolean> {
       // Best-effort.
     }
     session = null;
-    activeRoot = null;
-    activeProxy = undefined;
-    activeHeadless = undefined;
+    clearBindings();
     return true;
   }
   return false;
@@ -305,11 +321,6 @@ export async function clickAt(x: number, y: number): Promise<PageSnapshot> {
     await browser.clickAt(x, y);
     return browser.observe();
   });
-}
-
-/** Save the current page as PDF; returns the file path. */
-export async function savePdf(path?: string): Promise<string> {
-  return exclusive(async () => (await ensureSession()).savePdf(path));
 }
 
 /** Files downloaded in this session (name/path/source url). */
@@ -397,27 +408,22 @@ export async function closeSession(): Promise<void> {
       await session.close();
       session = null;
     }
-    activeRoot = null;
-    activeProxy = undefined;
-    activeHeadless = undefined;
+    clearBindings();
   });
 }
 
-/** Reset everything: close the session, stop the shared daemon, wipe the
- *  agent home (rendezvous, login store, downloads). Every agent loses its
- *  browser at once — loud and explicit, user-invoked only. Returns the
- *  wiped dir; next navigation relaunches fresh (re-login required). */
+/** Reset everything: close the session and wipe the agent home (profile,
+ *  session snapshot, downloads). Loud and explicit, user-invoked only.
+ *  Returns the wiped dir; next navigation relaunches fresh (re-login
+ *  required). */
 export async function resetSession(opts: { profileDir?: string } = {}): Promise<string> {
   return exclusive(async () => {
     if (session) {
       await session.close();
       session = null;
     }
-    activeRoot = null;
-    activeProxy = undefined;
-    activeHeadless = undefined;
+    clearBindings();
     const root = opts.profileDir ?? agentRoot();
-    await shutdownDaemon(root).catch(() => undefined);
     return wipeProfileCopy(root);
   });
 }
@@ -428,9 +434,8 @@ export function hasSession(): boolean {
 }
 
 /**
- * Run fn with a throwaway tab in the session's own context (creating the
- * session if needed). One-shots share the daemon, never the tab: each
- * process drives its own context, so concurrent agents cannot collide.
+ * Run fn with a throwaway tab in the session's own browser (creating the
+ * session if needed). One-shots share the session browser, never the tab.
  * fn must use the adapter directly, never session fns (reentrancy deadlock).
  */
 export async function runInTab<T>(

@@ -30,9 +30,9 @@ main()
     process.exitCode = 1;
   })
   .finally(async () => {
-    // Release our window. The shared daemon (and its CDP websocket) stays
-    // up for other agents — but that open socket keeps the node event loop
-    // alive, so exit explicitly once our work is done.
+    // Release our browser. Other agents run their own browsers, but an
+    // open browser keeps the node event loop alive, so exit explicitly
+    // once our work is done.
     await closeSession().catch(() => undefined);
     process.exit(process.exitCode ?? 0);
   });

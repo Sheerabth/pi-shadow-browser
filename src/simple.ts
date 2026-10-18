@@ -25,7 +25,8 @@ export function formatPage(page: PageSnapshot): string {
 }
 
 /**
- * Patchright stealth browser on the persistent agent profile. No keys,
+ * Camoufox browser on the persistent agent profile (or an ephemeral
+ * scratch browser when another process holds the profile). No keys,
  * no model calls — log in once and the session persists across runs.
  *
  * ```ts

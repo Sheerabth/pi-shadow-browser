@@ -5,12 +5,11 @@
 
 **Pi browses websites through its own stealth browser — a separate agent identity.**
 
-`pi-shadow-browser` is a TypeScript package + native Pi extension. Pi drives a
-persistent agent profile headless through
-[Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) (open-source
-stealth Chromium fork, Apache-2.0). Log in once inside the agent browser and
-the session persists — your own Chrome is never touched. No API keys —
-Pi itself is the agent loop; this package is its hands.
+`pi-shadow-browser` is a TypeScript package + native Pi extension. Pi drives
+[Camoufox](https://github.com/daijro/camoufox) (anti-detect Firefox) with a
+persistent agent profile, headless by default. Log in once inside the agent
+browser and the session persists — your own browser is never touched. No API
+keys — Pi itself is the agent loop; this package is its hands.
 
 ## The whole product: search, open, navigate
 
@@ -27,7 +26,8 @@ const page = await open(hits[0].url);
 ```
 
 As Pi tools (installed via `pi install <this-dir>`), Pi navigates step by
-step on one persistent session:
+step. The main Pi process owns the persistent profile; concurrent subagents
+get scratch browsers hydrated from the same saved session:
 
 | Tool | What Pi does with it |
 |---|---| 
@@ -44,7 +44,6 @@ _Postscript: data tools (`browser_search`, `browser_open`, `browser_video_transc
 | `browser_video_seek` | seek session video to N seconds + screenshot the frame |
 | `browser_video_transcript` | YouTube captions as timestamped text (InnerTube iOS, loud errors) |
 | `browser_tabs` / `browser_tab_switch` | operated tabs: list, switch, re-observe |
-| `browser_pdf` | save current page as PDF, returns path |
 | `browser_downloads` | files downloaded this session (name/path/source) |
 | `browser_find` | scroll first text match into view, re-observe |
 | `browser_search_page` | regex/text search over page text with context (no navigation) |
@@ -52,10 +51,10 @@ _Postscript: data tools (`browser_search`, `browser_open`, `browser_video_transc
 | `browser_tab_close` | close one tab (never the last) |
 | `browser_back` / `browser_forward` | history navigation + re-observe |
 | `browser_close` | close the session (reopens on next navigate) |
-| `/browser-reset` | close everything, stop the daemon, wipe the agent home (fresh login required after) |
+| `/browser-reset` | close everything, wipe the agent home (fresh login required after) |
 | `/browser-config` | show or change config (`/browser-config [key value \| reset [key]]`) |
 | `/browser-open` | open a focused blank tab in the shared window for manual use (log in by hand) |
-| `/browser-shutdown` | stop the shared browser daemon |
+| `/browser-shutdown` | stop the session browser |
 
 _Data tools (`browser_search`, `browser_open`, `browser_video_transcript`) return dual-channel results: readable text for the model plus typed `structuredContent` (declared `outputSchema`) for codemode scripts. No JSON parsing by the model._
 
@@ -68,19 +67,20 @@ npx tsx examples/run.ts --query "population of Zurich" --engine google
 ```
 search(query) → [{title, url}]     direct /search?q= URLs, redirect unwrapping,
                                    click-resolve for opaque links
-open(url)     → {title, text}      one observe on the shared daemon
-navigate/act  → PageSnapshot       per-process session on its own context
-                                   (concurrent agents coexist), serialized
-                                   ops, freshness-checked acts
+open(url)     → {title, text}      one observe in a throwaway tab
+navigate/act  → PageSnapshot       per-process session on its own browser
+                                   (main process holds the persistent profile;
+                                   others use scratch + saved session),
+                                   serialized ops, freshness-checked acts
 ```
 
 | File | Job |
 |---|---|
 | `src/search.ts` | `search()` → structured results; `open()` → page as **markdown** (headings, links, lists; SPA noise stripped) |
-| `src/session.ts` | per-process session on its own daemon context: lazy attach, serialized ops, clean close |
-| `src/daemon.ts` + `src/daemonRunner.mjs` | one shared stealth Chromium (CDP server, rendezvous file, supervised lifecycle) |
-| `src/browserAdapter.ts` | `observe/fresh/act/back/forward/goto/close` on Patchright stealth Chromium — **iframe-aware**: each frame snapshotted (cross-origin included), actions merged into one indexed space with freshness guards per frame |
-| `src/profile.ts` | agent home (`/tmp/agent-chrome/`, 0700): rendezvous, downloads + daemon-singleton lock |
+| `src/session.ts` | per-process session on its own Camoufox browser: lazy launch, serialized ops, clean close |
+| `src/launcher.ts` | browser ownership: profile-lock holder runs the canonical persistent profile; everyone else runs an ephemeral scratch browser hydrated from `<root>/state.json` (0600) |
+| `src/browserAdapter.ts` | `observe/fresh/act/back/forward/goto/close` on Camoufox — **iframe-aware**: each frame snapshotted (cross-origin included), actions merged into one indexed space with freshness guards per frame. Tab-ownership replaces window isolation (no PDF on Firefox — dropped) |
+| `src/profile.ts` | agent home (`/tmp/agent-chrome/`, 0700): persistent profile + session snapshot + downloads + profile lock |
 | `src/simple.ts` | `SimpleBrowser` — manual driving for scripts |
 | `vendor/shadow-supplement.js` | open-shadow-DOM + `[onclick]`/label/file-input controls, shared node identity |
 | `vendor/markdown.js` | dependency-free page-side HTML→Markdown (approach ported from browser-use) |
@@ -95,15 +95,16 @@ Prereqs: Node 22+.
 git clone <this-repo>
 cd pi-shadow-browser
 npm install
-npx patchright install chromium   # one-time stealth-browser download
+npx camoufox-js fetch   # one-time anti-detect browser download (postinstall does this)
 pi install ./pi-shadow-browser
 ```
 
-No browser extension, no `--remote-debugging-port` setup. Agents run headless
+No browser extension, no remote-debugging setup. Agents run headless
 by default; when you need eyes (first login, a wall, a visual check), run
 `/browser-open` for a headed blank tab, sign in yourself — credentials never
 touch the agent — and every session reuses the same logged-in profile
-(`/browser-reset` wipes it).
+(`/browser-reset` wipes it). Password fields are never observed or typed;
+logins happen by hand.
 
 ### Configuration
 
@@ -113,12 +114,11 @@ touch the agent — and every session reuses the same logged-in profile
 ```
 
 Defaults are agent-first: `headless: true`. Set it `false` for a visible
-browser, or pass `headless: false` on `browser_navigate` (first starter wins;
-`/browser-open` always opens headed).
+browser, or pass `headless: false` on `browser_navigate` (relaunch required
+to change headedness; `/browser-open` always opens headed).
 
 Precedence: tool args > `shadowBrowser` settings > defaults. One daemon serves
-the one shared browser every agent (and you) drives together;
-`/browser-shutdown` stops it, `/browser-reset` wipes everything. Prefer a
+the same saved logins. `/browser-reset` wipes everything. Prefer a
 dedicated agent account over your primary logins for high-value sites.
 
 ## Limits
@@ -136,8 +136,9 @@ your primary logins) for high-value sites.
 ## Acknowledgements
 
 * [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT) — `snapshot.js` (vendored at `1231850a`), freshness-guard design.
-* [browser-use/browser-use](https://github.com/browser-use/browser-use) (MIT) — ported mechanics: shadow traversal, markdown extraction, combobox settle, upload/find/wait/tab/pdf/download actions.
-* [Kaliiiiiiiiii-Vinyzu/patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright) (Apache-2.0) — stealth Playwright fork driving the agent browser.
+* [browser-use/browser-use](https://github.com/browser-use/browser-use) (MIT) — ported mechanics: shadow traversal, markdown extraction, combobox settle, upload/find/wait/tab/download actions (page-as-PDF dropped: unsupported on Firefox).
+* [daijro/camoufox](https://github.com/daijro/camoufox) (MPL-2.0) — anti-detect Firefox driving the agent browser.
+* [apify/camoufox-js](https://github.com/apify/camoufox-js) (Apache-2.0) — Node.js launcher for Camoufox.
 
 ## Contributing
 

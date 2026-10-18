@@ -3,7 +3,7 @@
  *
  * No decision models, no micro-loops, no keys. Pi is the agent loop; this
  * package is its hands: search, open, observe-with-actions, act, back,
- * forward — on one persistent session in its own stealth browser
+ * forward — on one persistent session in its own Camoufox browser
  * (separate agent identity; never touches your Chrome).
  *
  * Install as a Pi package (`pi install <this-dir>`) or load directly:
@@ -11,7 +11,7 @@
  *
  * Registers: browser_search, browser_open, browser_navigate, browser_act,
  * browser_press, browser_screenshot, browser_click_at, browser_tabs,
- * browser_tab_switch, browser_tab_close, browser_pdf, browser_downloads,
+ * browser_tab_switch, browser_tab_close, browser_downloads,
  * browser_find, browser_search_page, browser_wait, browser_back,
  * browser_forward, browser_close — plus /browser-config,
  * /browser-open, /browser-reset and /browser-shutdown.
@@ -58,7 +58,6 @@ import {
   redacted,
   resetSession,
   runWithSignal,
-  savePdf,
   screenshot,
   shutdownDaemon,
   search,
@@ -181,7 +180,7 @@ export default function (pi: ExtensionAPI) {
     name: "browser_search",
     label: "Search the web",
     description:
-      "Search the web through the user's stealth browser and get " +
+      "Search the web through the agent browser (Camoufox) and get " +
       "structured title+url+snippet results. No keys, fast. Follow with browser_open to read a result. " +
       "If a search comes back empty, retry the exact query ONCE; if still empty, stop for a while " +
       "(hammering triggers walls) — never silently switch engines.",
@@ -486,24 +485,6 @@ export default function (pi: ExtensionAPI) {
         return textResult(renderPage(page), page);
       } catch (err) {
         return failed("browser_tab_switch", err, { index: params.index });
-      }
-    },
-  });
-
-  registerTool({
-    name: "browser_pdf",
-    label: "Save page as PDF",
-    description: "Save the current session page as a PDF file. Returns the file path.",
-    parameters: Type.Object({
-      path: Type.Optional(Type.String({ description: "Where to save. Default: a temp file." })),
-    }),
-    execute: async (_toolCallId, params) => {
-      try {
-        sessionOpts();
-        const path = await savePdf(params.path);
-        return textResult(`Saved PDF to ${path}`, { path });
-      } catch (err) {
-        return failed("browser_pdf", err, {});
       }
     },
   });

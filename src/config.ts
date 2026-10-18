@@ -7,6 +7,7 @@
  * > defaults. No env, no .env.
  */
 
+
 export interface ChromeConfig {
   profileDir?: string;
   headless?: boolean;
