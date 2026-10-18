@@ -19,6 +19,10 @@
     "postinstall": "camoufox-js fetch || true"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pi-ecosystem/pi-shadow-browser.git"
+  },
   "keywords": [
     "pi-package",
     "browser",
