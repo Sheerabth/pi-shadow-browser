@@ -363,6 +363,11 @@ export class AgentBrowserAdapter {
     if (url && url !== "about:blank") {
       try {
         await p.goto(url);
+        try {
+          await p.evaluate("(() => { document.querySelectorAll('video,audio').forEach((el) => { try { el.muted = true; el.volume = 0; } catch {} }); })()");
+        } catch {
+          // Best-effort.
+        }
       } catch {
         // Best-effort (caller navigates anyway).
       }
@@ -677,6 +682,7 @@ export class AgentBrowserAdapter {
     }
 
     await this.page.mouse.click(pageX, pageY);
+    await this.muteMedia();
     if (kind === "fill") {
       if (text === undefined) throw new Error("fill needs text");
       await this.page.keyboard.press(process.platform === "darwin" ? "Meta+a" : "Control+a");
@@ -743,6 +749,7 @@ export class AgentBrowserAdapter {
     );
     if (!found) throw new Error("No video element on this page — navigate to a watch page first.");
     await sleep(800);
+    await this.muteMedia();
     const state = await this.page.evaluate(
       `(() => { const v = document.querySelector('video');` +
         ` return v ? { currentTime: v.currentTime, duration: v.duration || 0, paused: v.paused } : null; })()`,
@@ -816,6 +823,20 @@ export class AgentBrowserAdapter {
   /** Coordinate click in page CSS pixels (vision-grounded fallback). */
   async clickAt(x: number, y: number): Promise<void> {
     await this.page.mouse.click(x, y);
+  }
+
+  /** Silence every media element on the operated page. Cheap, best-effort;
+   *  called after any op that can start playback (goto, click, seek).
+   *  The init script (launcher) mutes at document-start; this re-mutes
+   *  players that unmute themselves on navigation or user gesture. */
+  private async muteMedia(): Promise<void> {
+    try {
+      await this.page.evaluate(
+        "(() => { document.querySelectorAll('video,audio').forEach((el) => { try { el.muted = true; el.volume = 0; } catch {} }); })()",
+      );
+    } catch {
+      // Best-effort (dead page, navigating).
+    }
   }
 
   /** Operated tabs: index + url + title for tabs in THIS window only. */
@@ -1002,6 +1023,7 @@ export class AgentBrowserAdapter {
       try {
         await this.page.goto(url);
         await this.page.waitForLoadState("domcontentloaded");
+        await this.muteMedia();
         return;
       } catch (err) {
         lastErr = err;

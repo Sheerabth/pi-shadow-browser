@@ -1,10 +1,12 @@
 /**
  * Video senses: transcripts and seek, no keys, no decisions.
  *
- * Transcripts come from the InnerTube IOS client (caption URLs not PO-gated,
- * pure fetch) — one path, loud errors, no silent fallback. Seeking
- * drives the session's <video> element with code-owned scripts (time is
- * data, like coordinates). Pi does the watching; this file is eyes and ears.
+ * Transcripts come from the watch page's own "Show transcript" panel
+ * (pure in-browser extraction, logged-in session, no keys, no hardcoded
+ * API clients) — the only path that works on age/login-gated videos the
+ * captions API refuses. Seeking drives the session's <video> element with
+ * code-owned scripts (time is data, like coordinates). Pi does the
+ * watching; this file is eyes and ears.
  */
 
 export interface TranscriptSegment {
@@ -43,113 +45,92 @@ export function videoIdFromUrl(url: string): string | null {
   return null;
 }
 
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCodePoint(parseInt(n, 16)))
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'");
+/** Parse a YouTube timestamp ("0:52", "1:02:03") to seconds. Pure. */
+export function parseTimestamp(text: string): number | null {
+  const parts = text.trim().split(":").map(Number);
+  if (parts.length < 1 || parts.length > 3 || parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
+  let s = 0;
+  for (const p of parts) s = s * 60 + p;
+  return s;
 }
 
-interface CaptionTrack {
-  lang: string;
-  name: string;
-  auto: boolean;
-  baseUrl: string;
+/** Raw segment as extracted from the watch page (no durations yet). */
+export interface PageSegment {
+  start: number;
+  text: string;
 }
 
-function pickTrack(tracks: CaptionTrack[], lang: string): CaptionTrack | undefined {
-  return (
-    tracks.find((t) => t.lang.startsWith(lang) && !t.auto) ??
-    tracks.find((t) => t.lang.startsWith(lang)) ??
-    tracks.find((t) => (t.lang === "en" || t.lang.startsWith("en")) && !t.auto) ??
-    tracks.find((t) => t.lang === "en" || t.lang.startsWith("en")) ??
-    tracks.find((t) => !t.auto) ??
-    tracks[0]
-  );
+/** Build full segments from page-extracted {start, text}: durations are
+ *  next-start gaps (last defaults to 5s). Pure. */
+export function segmentsFromPage(raw: PageSegment[]): TranscriptSegment[] {
+  const segs = raw.filter((s) => Number.isFinite(s.start) && s.text.trim().length > 0);
+  return segs.map((s, i) => ({
+    start: s.start,
+    dur: i + 1 < segs.length ? Math.max(0.5, segs[i + 1].start - s.start) : 5,
+    text: s.text.trim().replace(/\s+/g, " "),
+  }));
 }
 
-function parseSrv3(xml: string): TranscriptSegment[] {
-  const segments: TranscriptSegment[] = [];
-  for (const m of xml.matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/g)) {
-    const attrs = m[1];
-    const start = Number(attrs.match(/start="([\d.]+)"/)?.[1] ?? NaN);
-    const dur = Number(attrs.match(/dur="([\d.]+)"/)?.[1] ?? 0);
-    const text = decodeEntities(m[2].replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
-    if (!Number.isFinite(start) || !text) continue;
-    segments.push({ start, dur, text });
+/** In-page click: expand the description then the "Show transcript" button.
+ *  Returns "opened" | "already" | "missing" | "age-gated". The gated
+ *  state means the fix is a login, not a retry: sign in inside the agent
+ *  browser (/browser-open) then call again. Evaluated in the page. */
+export const OPEN_TRANSCRIPT_JS = `(() => {
+  const body = document.body ? document.body.innerText : '';
+  if (/sign in to confirm your age/i.test(body)) return 'age-gated';
+  const btns = [...document.querySelectorAll('button')];
+  if (document.querySelector('ytd-transcript-segment-renderer, transcript-segment-view-model')) return 'already';
+  const show = btns.find((b) => /show transcript/i.test(b.textContent || ''));
+  if (show) {
+    try { show.scrollIntoView({ block: 'center' }); } catch {}
+    try { show.click(); } catch { return 'missing'; }
+    return 'opened';
   }
-  return segments;
-}
+  const more = btns.find((b) => /^(\\.\\.\\.more|show more|\\.\\.\\.)$/i.test((b.textContent || '').trim()));
+  if (more) { try { more.click(); } catch {} }
+  const retry = [...document.querySelectorAll('button')].find((b) => /show transcript/i.test(b.textContent || ''));
+  if (!retry) return 'missing';
+  try { retry.scrollIntoView({ block: 'center' }); } catch {}
+  try { retry.click(); } catch { return 'missing'; }
+  return 'opened';
+})()`;
 
-const IOS_UA = "com.google.ios.youtube/20.10.38 (iPhone; CPU iPhone OS 17_5 like Mac OS X)";
-const IOS_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
-
-/** InnerTube IOS player: caption URLs without PO-token gating. */
-async function innertubeTracks(videoId: string): Promise<{ title: string; tracks: CaptionTrack[] }> {
-  const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${IOS_KEY}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": IOS_UA },
-    body: JSON.stringify({
-      videoId,
-      context: { client: { clientName: "IOS", clientVersion: "20.10.38" } },
-    }),
-    signal: AbortSignal.timeout(25_000),
-  });
-  if (!res.ok) throw new Error(`InnerTube HTTP ${res.status}`);
-  const data = (await res.json()) as Record<string, unknown>;
-  const status = (data.playabilityStatus as Record<string, unknown> | undefined)?.status;
-  if (status !== "OK") throw new Error(`Video not playable (${String(status ?? "unknown")}).`);
-  const details = data.videoDetails as Record<string, unknown> | undefined;
-  const title = typeof details?.title === "string" ? details.title : "";
-  const list = (
-    (data.captions as Record<string, unknown> | undefined)?.playerCaptionsTracklistRenderer as
-      | Record<string, unknown>
-      | undefined
-  )?.captionTracks as Record<string, unknown>[] | undefined;
-  const tracks: CaptionTrack[] = (list ?? []).flatMap((t) => {
-    const baseUrl = t.baseUrl;
-    const languageCode = t.languageCode;
-    if (typeof baseUrl !== "string" || typeof languageCode !== "string") return [];
-    const name = typeof t.name === "object" && t.name !== null ? String((t.name as Record<string, unknown>).simpleText ?? "") : "";
-    const vssId = typeof t.vssId === "string" ? t.vssId : "";
-    return [{ lang: languageCode, name, auto: t.kind === "asr" || /\.auto$/.test(vssId), baseUrl }];
-  });
-  return { title, tracks };
-}
-
-async function fetchOk(url: string, headers: Record<string, string> = {}): Promise<string> {
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(25_000) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
-}
-
-/**
- * Fetch a transcript via the InnerTube IOS client (caption URLs not
- * PO-gated). One path, no fallback: when YouTube gates or changes this,
- * it throws loudly with the specific cause instead of silently degrading.
- * Deliberate policy — hidden fallbacks hide breakage.
- */
-export async function videoTranscript(url: string, lang = "en"): Promise<VideoTranscript> {
-  const videoId = videoIdFromUrl(url);
-  if (!videoId) throw new Error("Not a YouTube watch/share URL.");
-  const { title, tracks } = await innertubeTracks(videoId);
-  if (tracks.length === 0) {
-    throw new Error(
-      `YouTube returned no caption tracks for ${videoId} (private, age-gated, or none published).`,
-    );
+/** In-page read: transcript segments from the opened panel. Handles both
+ *  the current `transcript-segment-view-model` layout (timestamp div +
+ *  text span) and the older `ytd-transcript-segment-renderer` layout.
+ *  Returns [{start, text}]. Evaluated in the page. */
+export const READ_TRANSCRIPT_JS = `(() => {
+  const out = [];
+  const parse = (t) => {
+    const parts = t.trim().split(':').map(Number);
+    if (parts.length < 1 || parts.length > 3 || parts.some((n) => !isFinite(n) || n < 0)) return null;
+    let s = 0; for (const p of parts) s = s * 60 + p; return s;
+  };
+  const fresh = document.querySelectorAll('transcript-segment-view-model');
+  if (fresh.length) {
+    for (const el of fresh) {
+      let start = null, tsText = '';
+      for (const d of el.querySelectorAll('div')) {
+        const t = (d.textContent || '').trim();
+        if (/^(\\d+:)?\\d{1,2}:\\d{2}$/.test(t)) { start = parse(t); tsText = t; break; }
+      }
+      if (start === null) continue;
+      const lines = (el.innerText || '').split('\\n').map((l) => l.trim()).filter(Boolean)
+        .filter((l) => l !== tsText && !/^\\d+ (second|minute|hour)/i.test(l));
+      const text = lines.join(' ').trim();
+      if (!text) continue;
+      out.push({ start, text });
+    }
+    return out;
   }
-  const pick = pickTrack(tracks, lang);
-  if (!pick) throw new Error(`No ${lang} captions on ${videoId} (${tracks.length} other tracks exist).`);
-  const xml = await fetchOk(pick.baseUrl, { "User-Agent": IOS_UA });
-  const segments = parseSrv3(xml);
-  if (segments.length === 0) {
-    throw new Error(
-      `Caption track for ${videoId} downloaded but parsed to zero segments (format changed upstream?).`,
-    );
+  for (const el of document.querySelectorAll('ytd-transcript-segment-renderer')) {
+    const lines = (el.innerText || '').split('\\n').map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) continue;
+    const start = parse(lines[0]);
+    if (start === null) continue;
+    const text = lines.slice(1).join(' ').trim();
+    if (!text) continue;
+    out.push({ start, text });
   }
-  return { videoId, title, lang: pick.lang, autoGenerated: pick.auto, segments };
-}
+  return out;
+})()`;

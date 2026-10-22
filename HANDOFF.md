@@ -31,8 +31,9 @@ headless browser as headed (an invisible window serves no manual use).
 - `src/launcher.ts` — `launchAgentBrowser({root, headless, proxy, locale})`:
   try profile lock (non-blocking) → persistent `Camoufox({user_data_dir})`
   + state export timer; on lock contention → ephemeral `Camoufox({})` +
-  `newContext({storageState})`. Returns `{ctx, browser|null, mode, cleanup,
-  statePath}`.
+  `newContext({storageState})`. Both muted: autoplay-blocking
+  `firefox_user_prefs` + an `addInitScript` media muter on the context.
+  Returns `{ctx, browser|null, mode, cleanup, statePath}`.
 - `src/browserAdapter.ts` — `AgentBrowserAdapter`: observe/fresh/act/press/
   screenshot/videoSeek/clickAt/tabList/tabSwitch/tabClose/findText/
   searchPageText/back/forward/goto/close/closeTabWithUrl + `withTab`,
@@ -65,8 +66,10 @@ headless browser as headed (an invisible window serves no manual use).
   `open` (page as markdown), `detectWall` (sorry/consent/home/blocked),
   `unwrapUrl`, `looksRedirect`, `isJunkResult`, `cleanMarkdown`,
   `registerEngine`. Rate-limited (4s between searches).
-- `src/video.ts` — YouTube transcripts via InnerTube iOS client, one path,
-  loud errors, no fallback. `videoIdFromUrl`, `videoTranscript`.
+- `src/video.ts` — transcript extraction from the watch page's own
+  "Show transcript" panel (`OPEN_TRANSCRIPT_JS`/`READ_TRANSCRIPT_JS`,
+  both old + view-model DOM). `videoIdFromUrl`, `parseTimestamp`,
+  `segmentsFromPage`. No keys, no API clients.
 - `src/simple.ts` — `SimpleBrowser` for scripts/manual driving on the adapter.
 - `src/types.ts` — `PageSnapshot`, `PageAction`.
 - `src/index.ts` — public exports. `dist/` is gitignored and rebuilt, never

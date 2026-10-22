@@ -164,11 +164,22 @@ export default function (pi: ExtensionAPI) {
   // merged on top of settings. Engine keys (profileDir/headless/proxy)
   // additionally close the live session so the next op rebinds engines.
   let runtimeOverrides: Partial<ChromeConfig> = {};
+  // Explicit headless source of truth (settings.json /browser-config /
+  // per-call param). Everything forwarded to the session uses this —
+  // never the filled launch default — so background one-shots can't
+  // rebind (kill) a live headed window. Refreshed by sessionOpts().
+  let lastExplicitHeadless: boolean | undefined;
   const sessionOpts = () => {
-    const opts = loadConfig({ ...settingsOverrides(), ...runtimeOverrides });
+    // headless is sticky-explicit only: the built-in default (true) must
+    // never reach the session, or every bare tool call would read it as
+    // "headless wanted" and kill a live headed window (the flash-blank
+    // cycle). Only settings.json /browser-config / per-call params rebind.
+    const explicit = { ...settingsOverrides(), ...runtimeOverrides };
+    lastExplicitHeadless = explicit.headless;
+    const opts = loadConfig(explicit);
     configureSession({
       profileDir: opts.profileDir,
-      headless: opts.headless,
+      headless: explicit.headless,
       locale: opts.locale,
       timezone: opts.timezone,
       proxy: opts.proxy,
@@ -218,7 +229,7 @@ export default function (pi: ExtensionAPI) {
           engine: (params.engine ?? "google") as "google",
           maxResults: Math.min(params.maxResults ?? 5, 50),
           depth: Math.min(params.depth ?? 0, 5),
-          headless: cfg.headless,
+          headless: lastExplicitHeadless,
           profileDir: cfg.profileDir,
           proxy: cfg.proxy,
         };
@@ -279,7 +290,9 @@ export default function (pi: ExtensionAPI) {
     }),
     execute: async (_toolCallId, params) => {
       try {
-        const page = await open(params.url, sessionOpts());
+        // Explicit headless only (see sessionOpts): a filled default here
+        // would rebind-kill a live headed window on every open.
+        const page = await open(params.url, { ...sessionOpts(), headless: lastExplicitHeadless });
         const structured: Record<string, unknown> = { url: page.url, title: page.title, text: page.text };
         for (const k of ["author", "published", "description"] as const) {
           const v = (page as unknown as Record<string, unknown>)[k];
@@ -297,7 +310,9 @@ export default function (pi: ExtensionAPI) {
     label: "Go to URL in session",
     description:
       "Navigate the shared browser session to a URL and observe: visible text plus the action ids " +
-      "browser_act can use. Starts the session on first use.",
+      "browser_act can use. Starts the session on first use. Clean up after yourself: close tabs " +
+      "you opened (browser_tab_close) and close the session (browser_close) when the task is done, " +
+      "unless the user is watching in a headed window they summoned.",
     parameters: Type.Object({
       url: Type.String({ description: "URL to navigate to." }),
       headless: Type.Optional(Type.Boolean({ description: "Headless mode. Default true (agent runs unseen); pass false for a visible window. Applies when starting the shared browser; first starter wins." })),
@@ -305,9 +320,10 @@ export default function (pi: ExtensionAPI) {
     execute: async (_toolCallId, params) => {
       try {
         const base = sessionOpts();
-        const cfg = loadConfig({ ...base, headless: params.headless ?? base.headless });
+        const cfg = loadConfig({ ...base });
         const page = await navigate(params.url, {
-          headless: cfg.headless,
+          // Explicit flip only: undefined leaves a live headed window alone.
+          headless: params.headless,
           profileDir: cfg.profileDir,
           locale: cfg.locale,
           timezone: cfg.timezone,
@@ -424,7 +440,9 @@ export default function (pi: ExtensionAPI) {
   registerTool({
     name: "browser_close",
     label: "Close browser session",
-    description: "Close the shared browser session and release the profile. The next navigation reopens it.",
+    description:
+      "Close the shared browser session and release the profile. The next navigation reopens it. " +
+      "Call this when your browsing task is done and the user isn't watching — leaves no windows behind.",
     parameters: Type.Object({}),
     execute: async () => {
       await closeSession();
@@ -615,12 +633,12 @@ export default function (pi: ExtensionAPI) {
     name: "browser_video_transcript",
     label: "Get video transcript",
     description:
-      "Fetch a YouTube video's captions as timestamped text — the fastest way to " +
-      "understand a video without watching it. No keys. Fails clearly when a video " +
-      "has no published captions.",
+      "Read a YouTube video's Show transcript panel as timestamped text — " +
+      "the fastest way to understand a video without watching it. No keys, " +
+      "uses the logged-in session, works on age/login-gated videos. Fails " +
+      "clearly when the video has no transcript panel.",
     parameters: Type.Object({
       url: Type.String({ description: "YouTube watch/share/shorts URL." }),
-      lang: Type.Optional(Type.String({ description: "Caption language code. Default en." })),
     }),
     outputSchema: Type.Object({
       videoId: Type.String(),
@@ -631,7 +649,7 @@ export default function (pi: ExtensionAPI) {
     }),
     execute: async (_toolCallId, params) => {
       try {
-        const t = await videoTranscript(params.url, params.lang ?? "en");
+        const t = await videoTranscript(params.url);
         const stamp = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
         const lines = t.segments.map((s) => `[${stamp(s.start)}] ${s.text}`);
         const body = lines.join("\n");

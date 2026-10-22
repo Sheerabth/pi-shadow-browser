@@ -33,6 +33,50 @@ export interface LaunchResult {
   statePath: string;
 }
 
+const MUTED_PREFS: Record<string, unknown> = {
+  // Agent browser is never watched: silent by default. The user heard
+  // YouTube autoplay during a transcript task — never again.
+  "media.volume_scale": "0.0",
+  "media.autoplay.default": 5,
+  "media.autoplay.blocking_policy": 2,
+  "media.autoplay.allow-extension-background-pages": false,
+  "media.autoplay.block-event.enabled": true,
+  "media.block-autoplay-until-in-foreground": true,
+};
+
+/** Mute every <video>/<audio> at document-start + as they appear.
+ *  addInitScript on the context: survives navigations, SPAs, late
+ *  players. videoSeek() explicitly unmutes? No — it plays muted; the
+ *  frame screenshot is what matters, never the sound. */
+const MUTE_INIT_SCRIPT = `(() => {
+  const mute = (el) => { try { el.muted = true; el.volume = 0; } catch {} };
+  const sweep = (root) => {
+    try { (root.querySelectorAll?.('video,audio') ?? []).forEach(mute); } catch {}
+  };
+  sweep(document);
+  new MutationObserver((muts) => {
+    for (const m of muts) for (const n of m.addedNodes) {
+      if (n instanceof HTMLMediaElement) mute(n);
+      else if (n instanceof Element) sweep(n);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();`;
+
+async function muteContext(ctx: BrowserContext): Promise<void> {
+  try {
+    await ctx.addInitScript({ content: MUTE_INIT_SCRIPT });
+  } catch {
+    // Best-effort (older Playwright without addInitScript on context).
+  }
+  // Belt-and-braces for the already-open pages.
+  for (const p of ctx.pages()) {
+    try {
+      await p.evaluate(`(() => { document.querySelectorAll('video,audio').forEach((el) => { try { el.muted = true; el.volume = 0; } catch {} }); })()`);
+    } catch {
+      // Best-effort.
+    }
+  }
+}
 export function sharedStatePath(root?: string): string {
   return join(root ?? agentRoot(), "state.json");
 }
@@ -69,7 +113,7 @@ export async function launchAgentBrowser(opts: {
   const root = ensureAgentRoot(opts.root);
   const statePath = sharedStatePath(root);
   const headless = opts.headless ?? true;
-  const base: Record<string, unknown> = { headless };
+  const base: Record<string, unknown> = { headless, firefox_user_prefs: { ...MUTED_PREFS } };
   if (opts.proxy) base.proxy = opts.proxy;
   if (opts.locale) base.locale = opts.locale;
 
@@ -79,6 +123,7 @@ export async function launchAgentBrowser(opts: {
     const release = await acquireProfileLock(root, 1);
     const dir = join(root, "camoufox-profile");
     const ctx = (await Camoufox({ user_data_dir: dir, ...base })) as unknown as BrowserContext;
+    await muteContext(ctx);
     await exportState(ctx, statePath);
     const timer = setInterval(() => void exportState(ctx, statePath), 60_000);
     const maybeUnref = timer as unknown as { unref?: () => void };
@@ -107,6 +152,7 @@ export async function launchAgentBrowser(opts: {
   }
   const browser = (await Camoufox({ ...base })) as unknown as Browser;
   const ctx = await browser.newContext(stateImport(root));
+  await muteContext(ctx);
   return {
     ctx,
     browser,

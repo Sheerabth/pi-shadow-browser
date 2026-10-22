@@ -42,7 +42,7 @@ _Postscript: data tools (`browser_search`, `browser_open`, `browser_video_transc
 | `browser_screenshot` | JPEG to Pi vision (canvas/maps/visual fallback) |
 | `browser_click_at` | click at viewport x/y — vision-grounded fallback for what the DOM can't see |
 | `browser_video_seek` | seek session video to N seconds + screenshot the frame |
-| `browser_video_transcript` | YouTube captions as timestamped text (InnerTube iOS, loud errors) |
+| `browser_video_transcript` | YouTube Show-transcript panel as timestamped text (in-browser, no keys) |
 | `browser_tabs` / `browser_tab_switch` | operated tabs: list, switch, re-observe |
 | `browser_downloads` | files downloaded this session (name/path/source) |
 | `browser_find` | scroll first text match into view, re-observe |
